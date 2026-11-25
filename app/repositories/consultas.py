@@ -108,6 +108,18 @@ def saldo_colchon(db: Session, usuario_id: str) -> int:
     return int(total or 0)
 
 
+def apartado_extra_del_ciclo(db: Session, usuario_id: str, ciclo_inicio: date) -> int:
+    """Plata de este periodo que la persona pasó al colchón a mano."""
+    total = db.scalar(
+        select(func.coalesce(func.sum(MovimientoFondo.monto), 0)).where(
+            MovimientoFondo.usuario_id == usuario_id,
+            MovimientoFondo.tipo == "aporte_extra",
+            MovimientoFondo.ciclo_inicio == ciclo_inicio,
+        )
+    )
+    return int(total or 0)
+
+
 def aporte_del_ciclo(db: Session, usuario_id: str, ciclo_inicio: date) -> int:
     total = db.scalar(
         select(func.coalesce(func.sum(MovimientoFondo.monto), 0)).where(

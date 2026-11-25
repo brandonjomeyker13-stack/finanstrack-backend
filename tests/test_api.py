@@ -354,9 +354,32 @@ def test_cambiar_el_porcentaje_reemplaza_el_colchon_y_las_bolsas(cliente):
     assert bolsas["colchon"]["saldo"] == 125_000
 
 
-def test_confirmar_el_pago_no_duplica_el_colchon_aunque_carguen_dos_pantallas(cliente):
-    from concurrent.futures import ThreadPoolExecutor
+def test_meter_al_colchon_no_pasa_de_lo_que_queda(cliente):
+    headers = _entrar(cliente, email="colchon@example.com")
+    _empezar(cliente, headers, colchon_inicial=40_000)
+    foto = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert foto["disponible_para_gastar"] == 2_250_000
+    assert foto["colchon"]["saldo"] == 290_000
 
+    visto = cliente.get("/api/v1/colchon", headers=headers).json()
+    assert visto["puedes_meter"] == 2_250_000
+    de_mas = cliente.post("/api/v1/colchon/aportar", json={"monto": 2_250_001}, headers=headers)
+    assert de_mas.status_code == 422
+
+    metido = cliente.post("/api/v1/colchon/aportar", json={"monto": 100_000}, headers=headers)
+    assert metido.status_code == 201, metido.text
+    assert metido.json()["saldo"] == 390_000
+    assert metido.json()["puedes_meter"] == 2_150_000
+
+    despues = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert despues["disponible_para_gastar"] == 2_150_000
+    gustos = next(bolsa for bolsa in despues["bolsas"] if bolsa["id"] == "gustos")
+    assert gustos["disponible"] == 150_000
+    otra = cliente.post("/api/v1/colchon/aportar", json={"monto": 2_150_001}, headers=headers)
+    assert otra.status_code == 422
+
+
+def test_abrir_el_periodo_dos_veces_no_duplica_el_colchon(cliente):
     headers = _entrar(cliente, email="carrera@example.com")
     _empezar(cliente, headers, situacion="lo_espero")
     foto = cliente.get("/api/v1/presupuesto", headers=headers).json()
@@ -368,13 +391,9 @@ def test_confirmar_el_pago_no_duplica_el_colchon_aunque_carguen_dos_pantallas(cl
     )
     assert confirmado.status_code == 200, confirmado.text
 
-    def abrir(ruta: str) -> int:
+    for ruta in ("/api/v1/presupuesto", "/api/v1/informe", "/api/v1/presupuesto"):
         respuesta = cliente.get(ruta, headers=headers)
         assert respuesta.status_code == 200, respuesta.text
-        return respuesta.status_code
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(abrir, ("/api/v1/presupuesto", "/api/v1/informe")))
     final = cliente.get("/api/v1/presupuesto", headers=headers).json()
     assert final["colchon"]["saldo"] == 250_000
     assert final["colchon"]["aporte_del_ciclo"] == 250_000

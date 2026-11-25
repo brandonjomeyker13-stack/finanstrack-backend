@@ -95,6 +95,7 @@ def _dominio(
         ],
         saldo_colchon=repo.saldo_colchon(db, usuario_id),
         saldo_apertura=fila.monto if fila else 0,
+        apartado_manual=repo.apartado_extra_del_ciclo(db, usuario_id, ciclo.inicio),
         hoy=dia_calculo,
     )
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.domain.bolsas import BOLSAS, COLCHON, GASTABLES, OBLIGATORIO, ORDEN_RECORTE
+from app.domain.bolsas import BOLSAS, COLCHON, GASTABLES, OBLIGATORIO, ORDEN_APARTAR, ORDEN_RECORTE
 from app.domain.ciclo import Ciclo, ReglasPago
 from app.domain.dinero import por_dia, recortar, repartir
 
@@ -112,12 +112,17 @@ class Presupuesto:
     aporte_colchon: int
     saldo_colchon: int
     faltante: int
+    fuera_de_bolsas: int = 0
     ajustes: list[Ajuste] = field(default_factory=list)
     calculado_en: date = field(default_factory=date.today)
 
     @property
     def disponible_para_gastar(self) -> int:
-        return self.saldo_apertura + sum(self.disponible.get(bolsa, 0) for bolsa in GASTABLES)
+        return (
+            self.saldo_apertura
+            + sum(self.disponible.get(bolsa, 0) for bolsa in GASTABLES)
+            - self.fuera_de_bolsas
+        )
 
     @property
     def dias_restantes(self) -> int:
@@ -154,6 +159,7 @@ def calcular(
     cuentas: list[CuentaVista],
     saldo_colchon: int,
     saldo_apertura: int = 0,
+    apartado_manual: int = 0,
     hoy: date,
 ) -> Presupuesto:
     ingresos_ciclo = [i for i in ingresos if ciclo.contiene(i.fecha)]
@@ -184,6 +190,7 @@ def calcular(
             aporte_colchon=0,
             saldo_colchon=saldo_colchon,
             faltante=0,
+            fuera_de_bolsas=apartado_manual if apartado_manual > 0 else 0,
             calculado_en=hoy,
         )
 
@@ -222,6 +229,10 @@ def calcular(
             for bolsa, monto in hechos
         ]
 
+    fuera_de_bolsas = 0
+    if apartado_manual > 0:
+        fuera_de_bolsas, _ = recortar(libre, apartado_manual, ORDEN_APARTAR)
+
     aporte = libre.get(COLCHON, 0)
     disponible = {bolsa: libre.get(bolsa, 0) for bolsa in GASTABLES}
     asignado_visto = {
@@ -245,6 +256,7 @@ def calcular(
         aporte_colchon=aporte,
         saldo_colchon=saldo_colchon,
         faltante=faltante,
+        fuera_de_bolsas=fuera_de_bolsas,
         ajustes=ajustes,
         calculado_en=hoy,
     )

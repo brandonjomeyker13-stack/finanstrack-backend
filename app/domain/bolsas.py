@@ -12,6 +12,8 @@ GASTABLES = (OBLIGATORIO, DEUDA_EXTRA, VARIABLE, GUSTOS)
 # Cuando las cuotas no caben en Cuentas, se achica en este orden.
 # Día a día se toca de último: mercado y transporte.
 ORDEN_RECORTE = (GUSTOS, DEUDA_EXTRA, COLCHON, VARIABLE)
+# Lo que metes al colchón a mano sale de lo que todavía podías gastar.
+ORDEN_APARTAR = (GUSTOS, DEUDA_EXTRA, VARIABLE, OBLIGATORIO)
 
 NOMBRES = {
     OBLIGATORIO: "Cuentas",

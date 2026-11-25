@@ -275,6 +275,7 @@ class MovimientoOut(BaseModel):
 class ColchonOut(BaseModel):
     saldo: int
     aporte_del_ciclo: int
+    puedes_meter: int
     movimientos: list[MovimientoOut]
 
 
