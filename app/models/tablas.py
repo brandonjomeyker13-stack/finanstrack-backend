@@ -1,7 +1,19 @@
 from datetime import date, datetime
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -110,6 +122,16 @@ class Gasto(Base, TimestampMixin):
 
 class MovimientoFondo(Base, TimestampMixin):
     __tablename__ = "movimientos_fondo"
+    __table_args__ = (
+        Index(
+            "uq_aporte_ciclo",
+            "usuario_id",
+            "ciclo_inicio",
+            unique=True,
+            sqlite_where=text("tipo = 'aporte_ciclo'"),
+            postgresql_where=text("tipo = 'aporte_ciclo'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
     usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id", ondelete="CASCADE"), index=True)

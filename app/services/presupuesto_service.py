@@ -2,6 +2,8 @@
 
 from datetime import date, timedelta
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ValidationError
@@ -97,27 +99,94 @@ def _dominio(
     )
 
 
-def _sincronizar(db: Session, usuario_id: str, foto: Presupuesto) -> int:
-    """Deposita en el colchón lo que este periodo le debe. Dos veces no duplica."""
-    objetivo = foto.aporte_colchon
-    if objetivo <= 0:
-        return 0
-    ya = repo.aporte_del_ciclo(db, usuario_id, foto.ciclo.inicio)
-    diferencia = objetivo - ya
-    if diferencia <= 0:
-        return 0
-    db.add(
-        MovimientoFondo(
-            usuario_id=usuario_id,
-            tipo="aporte_ciclo",
-            monto=diferencia,
-            fecha=foto.calculado_en,
-            ciclo_inicio=foto.ciclo.inicio,
-            motivo=f"Aporte de este periodo ({foto.reglas.pct_colchon}% de tu pago)",
+def _aportes_del_ciclo(db: Session, usuario_id: str, inicio: date) -> list[MovimientoFondo]:
+    consulta = (
+        select(MovimientoFondo)
+        .where(
+            MovimientoFondo.usuario_id == usuario_id,
+            MovimientoFondo.tipo == "aporte_ciclo",
+            MovimientoFondo.ciclo_inicio == inicio,
         )
+        .order_by(MovimientoFondo.created_at, MovimientoFondo.id)
     )
+    if db.get_bind().dialect.name != "sqlite":
+        consulta = consulta.with_for_update()
+    return list(db.scalars(consulta))
+
+
+def _dejar_aporte(
+    db: Session,
+    filas: list[MovimientoFondo],
+    objetivo: int,
+    usuario_id: str,
+    foto: Presupuesto,
+) -> None:
+    """Una sola fila por periodo, con el monto exacto del porcentaje actual."""
+    if objetivo <= 0:
+        for fila in filas:
+            db.delete(fila)
+        db.flush()
+        return
+    if not filas:
+        db.add(
+            MovimientoFondo(
+                usuario_id=usuario_id,
+                tipo="aporte_ciclo",
+                monto=objetivo,
+                fecha=foto.calculado_en,
+                ciclo_inicio=foto.ciclo.inicio,
+                motivo=f"Aporte de este periodo ({foto.reglas.pct_colchon}% de tu pago)",
+            )
+        )
+        db.flush()
+        return
+    principal = filas[0]
+    for extra in filas[1:]:
+        db.delete(extra)
+    principal.monto = objetivo
+    principal.motivo = f"Aporte de este periodo ({foto.reglas.pct_colchon}% de tu pago)"
     db.flush()
-    return diferencia
+
+
+def _sincronizar(db: Session, usuario_id: str, foto: Presupuesto) -> None:
+    """El aporte automático de este periodo queda en el porcentaje de ahora.
+
+    Subir el colchón de 10% a 15% deja 15% del pago, no 10% más otro 15%.
+    Bajarlo devuelve la diferencia. Lo que apartaste a mano no se toca.
+    Si el colchón ya se usó, no se baja de cero.
+    """
+    objetivo = foto.aporte_colchon if foto.aporte_colchon > 0 else 0
+    filas = _aportes_del_ciclo(db, usuario_id, foto.ciclo.inicio)
+    ya = sum(fila.monto for fila in filas)
+    if objetivo < ya:
+        saldo = foto.saldo_colchon if foto.saldo_colchon > 0 else 0
+        minimo = ya - saldo
+        if minimo > objetivo:
+            objetivo = minimo
+    if not filas and objetivo > 0:
+        try:
+            with db.begin_nested():
+                db.add(
+                    MovimientoFondo(
+                        usuario_id=usuario_id,
+                        tipo="aporte_ciclo",
+                        monto=objetivo,
+                        fecha=foto.calculado_en,
+                        ciclo_inicio=foto.ciclo.inicio,
+                        motivo=f"Aporte de este periodo ({foto.reglas.pct_colchon}% de tu pago)",
+                    )
+                )
+                db.flush()
+        except IntegrityError:
+            _dejar_aporte(
+                db,
+                _aportes_del_ciclo(db, usuario_id, foto.ciclo.inicio),
+                objetivo,
+                usuario_id,
+                foto,
+            )
+        return
+    _dejar_aporte(db, filas, objetivo, usuario_id, foto)
 
 
 def _cerrar_anteriores(db: Session, usuario_id: str, perfil: Perfil, ciclo, profundidad: int = 0) -> None:
@@ -171,7 +240,8 @@ def preparar(db: Session, usuario: Usuario, dia: date | None = None) -> Presupue
     _cerrar_anteriores(db, usuario.id, perfil, ciclo)
     _asegurar_pago_fijo(db, usuario.id, perfil, ciclo)
     foto = _dominio(db, usuario.id, perfil, dia)
-    foto.saldo_colchon += _sincronizar(db, usuario.id, foto)
+    _sincronizar(db, usuario.id, foto)
+    foto.saldo_colchon = repo.saldo_colchon(db, usuario.id)
     return foto
 
 

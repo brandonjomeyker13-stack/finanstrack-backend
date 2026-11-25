@@ -305,6 +305,81 @@ def test_informe_avisa_un_dia_antes_y_el_primer_periodo_no_se_compara(cliente, m
     assert any("Mañana vence Celular" in frase for frase in cuerpo["consejos"])
 
 
+def _guardar_reparto(cliente, headers, **cambios):
+    cuerpo = {
+        "frecuencia": "mensual",
+        "dia_de_corte": 1,
+        "segundo_dia_de_corte": None,
+        "ancla_de_pago": None,
+        "monto_pago": 2_500_000,
+        "nombre_pago": "Sueldo",
+        "pct_obligatorio": 45,
+        "pct_deuda_extra": 15,
+        "pct_variable": 20,
+        "pct_gustos": 10,
+        "pct_colchon": 10,
+    }
+    cuerpo.update(cambios)
+    respuesta = cliente.put("/api/v1/perfil", json=cuerpo, headers=headers)
+    assert respuesta.status_code == 200, respuesta.text
+
+
+def test_cambiar_el_porcentaje_reemplaza_el_colchon_y_las_bolsas(cliente):
+    headers = _entrar(cliente, email="reparto@example.com")
+    _empezar(cliente, headers)
+    antes = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert antes["colchon"]["saldo"] == 250_000
+    cuentas = next(bolsa for bolsa in antes["bolsas"] if bolsa["id"] == "obligatorio")
+    assert cuentas["asignado"] == 1_125_000
+
+    _guardar_reparto(cliente, headers, pct_colchon=15, pct_gustos=5)
+    subido = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert subido["colchon"]["aporte_del_ciclo"] == 375_000
+    assert subido["colchon"]["saldo"] == 375_000
+    gustos = next(bolsa for bolsa in subido["bolsas"] if bolsa["id"] == "gustos")
+    assert gustos["asignado"] == 125_000
+    repetido = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert repetido["colchon"]["saldo"] == 375_000
+
+    _guardar_reparto(cliente, headers, pct_colchon=10, pct_gustos=10)
+    bajado = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert bajado["colchon"]["aporte_del_ciclo"] == 250_000
+    assert bajado["colchon"]["saldo"] == 250_000
+
+    _guardar_reparto(cliente, headers, pct_obligatorio=50, pct_colchon=5)
+    bolsas = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    cuentas = next(bolsa for bolsa in bolsas["bolsas"] if bolsa["id"] == "obligatorio")
+    assert cuentas["asignado"] == 1_250_000
+    assert cuentas["disponible"] == 1_250_000
+    assert bolsas["colchon"]["saldo"] == 125_000
+
+
+def test_confirmar_el_pago_no_duplica_el_colchon_aunque_carguen_dos_pantallas(cliente):
+    from concurrent.futures import ThreadPoolExecutor
+
+    headers = _entrar(cliente, email="carrera@example.com")
+    _empezar(cliente, headers, situacion="lo_espero")
+    foto = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert foto["colchon"]["saldo"] == 0
+    confirmado = cliente.post(
+        f"/api/v1/ingresos/{foto['pago_fijo']['id']}/confirmar",
+        json={},
+        headers=headers,
+    )
+    assert confirmado.status_code == 200, confirmado.text
+
+    def abrir(ruta: str) -> int:
+        respuesta = cliente.get(ruta, headers=headers)
+        assert respuesta.status_code == 200, respuesta.text
+        return respuesta.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(abrir, ("/api/v1/presupuesto", "/api/v1/informe")))
+    final = cliente.get("/api/v1/presupuesto", headers=headers).json()
+    assert final["colchon"]["saldo"] == 250_000
+    assert final["colchon"]["aporte_del_ciclo"] == 250_000
+
+
 def test_borrar_la_cuenta_no_deja_entrar(cliente):
     headers = _entrar(cliente, email="borrar@example.com")
     _empezar(cliente, headers)
